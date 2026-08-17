@@ -24,6 +24,8 @@ dependencies {
     mappings(variantOf(libs.yarn) { classifier("v2") })
     modImplementation(libs.fabric.loader)
     modImplementation(libs.meteor.client)
+
+    testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
 }
 
 tasks {
@@ -39,6 +41,10 @@ tasks {
         filesMatching("fabric.mod.json") {
             expand(propertyMap)
         }
+    }
+
+    test {
+        useJUnitPlatform()
     }
 
     jar {
