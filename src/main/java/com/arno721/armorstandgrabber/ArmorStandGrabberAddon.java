@@ -1,24 +1,39 @@
 package com.arno721.armorstandgrabber;
 
 import com.arno721.armorstandgrabber.modules.ArmorStandGrabber;
+import com.arno721.armorstandgrabber.runtime.ClientRuntime;
 import com.mojang.logging.LogUtils;
 import meteordevelopment.meteorclient.addons.GithubRepo;
 import meteordevelopment.meteorclient.addons.MeteorAddon;
 import meteordevelopment.meteorclient.systems.modules.Category;
 import meteordevelopment.meteorclient.systems.modules.Modules;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.minecraft.client.MinecraftClient;
 import org.slf4j.Logger;
 
 public class ArmorStandGrabberAddon extends MeteorAddon {
     public static final Logger LOG = LogUtils.getLogger();
     public static final Category CATEGORY = new Category("Armor Stand");
 
+    private static ClientRuntime runtime;
+
     @Override
     public void onInitialize() {
         LOG.info("Initializing Armor Stand Grabber");
-        ArmorStandGrabber module = new ArmorStandGrabber();
-        Modules.get().add(module);
-        ClientTickEvents.END_CLIENT_TICK.register(client -> module.onFabricTick());
+
+        runtime = new ClientRuntime(MinecraftClient.getInstance());
+        ArmorStandGrabber armorStandGrabber = new ArmorStandGrabber(
+            runtime.inventoryMutex(),
+            runtime.rotationCoordinator()
+        );
+
+        runtime.register(armorStandGrabber);
+        Modules.get().add(armorStandGrabber);
+        ClientTickEvents.END_CLIENT_TICK.register(runtime::tick);
+    }
+
+    public static ClientRuntime runtime() {
+        return runtime;
     }
 
     @Override

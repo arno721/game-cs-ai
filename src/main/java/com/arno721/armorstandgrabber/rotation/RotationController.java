@@ -1,19 +1,22 @@
 package com.arno721.armorstandgrabber.rotation;
 
+import com.arno721.armorstandgrabber.runtime.RotationCoordinator;
+import com.arno721.armorstandgrabber.runtime.RuntimeOwner;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.EquipmentSlot;
 import net.minecraft.entity.decoration.ArmorStandEntity;
-import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
 import net.minecraft.util.math.Vec3d;
 
 public final class RotationController {
     private final MinecraftClient mc;
+    private final RotationCoordinator coordinator;
     private ArmorStandEntity target;
     private RotationState state;
     private long lastUpdateNs;
 
-    public RotationController(MinecraftClient mc) {
+    public RotationController(MinecraftClient mc, RotationCoordinator coordinator) {
         this.mc = mc;
+        this.coordinator = coordinator;
     }
 
     public void begin(ArmorStandEntity target) {
@@ -42,7 +45,7 @@ public final class RotationController {
     }
 
     private void update(EquipmentSlot currentSlot, RotationMode mode, RotationTarget targetMode, RotationAlgorithm algorithm, RotationConfig config, boolean interactionUpdate) {
-        if (target == null || mc.player == null || mc.getNetworkHandler() == null || !target.isAlive()) return;
+        if (target == null || mc.player == null || !target.isAlive()) return;
 
         Vec3d point = targetPoint(target, currentSlot, targetMode);
         double eyeY = mc.player.getY() + mc.player.getEyeHeight(mc.player.getPose());
@@ -54,17 +57,12 @@ public final class RotationController {
         state = RotationMath.advance(state, desired.yaw(), desired.pitch(), algorithm, dt, config);
         lastUpdateNs = now;
 
-        if (mode == RotationMode.Lock) {
-            mc.player.setYaw((float) state.yaw());
-            mc.player.setPitch((float) state.pitch());
-        } else {
-            mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
-                (float) state.yaw(),
-                (float) state.pitch(),
-                mc.player.isOnGround(),
-                mc.player.horizontalCollision
-            ));
-        }
+        coordinator.tryApply(
+            RuntimeOwner.ARMOR_STAND_GRABBER,
+            state.yaw(),
+            state.pitch(),
+            mode == RotationMode.Lock
+        );
     }
 
     private static Vec3d targetPoint(ArmorStandEntity armorStand, EquipmentSlot slot, RotationTarget mode) {

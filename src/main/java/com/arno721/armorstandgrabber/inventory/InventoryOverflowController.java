@@ -16,7 +16,12 @@ public final class InventoryOverflowController {
         this.mc = mc;
     }
 
-    public int prepareOverflow(int originalSelectedSlot, OverflowMode mode) {
+    public int prepareOverflow(
+        int originalSelectedSlot,
+        OverflowMode mode,
+        Runnable beginAtomic,
+        Runnable endAtomic
+    ) {
         if (mc.player == null || mc.interactionManager == null || mode == OverflowMode.Off) return -1;
         int destination = findEmptyMainInventorySlot();
         if (destination < 0) return -1;
@@ -28,31 +33,33 @@ public final class InventoryOverflowController {
             } else if (!(mc.currentScreen instanceof InventoryScreen)) return -1;
         }
 
-        int buffer = originalSelectedSlot >= 0 && originalSelectedSlot <= 8 ? originalSelectedSlot : mc.player.getInventory().getSelectedSlot();
+        int buffer = originalSelectedSlot >= 0 && originalSelectedSlot <= 8
+            ? originalSelectedSlot
+            : mc.player.getInventory().getSelectedSlot();
         hotbarSlot = buffer;
         inventorySlot = destination;
-        if (!swapHotbarWithInventory(hotbarSlot, inventorySlot)) {
+        if (!runAtomicSwap(hotbarSlot, inventorySlot, beginAtomic, endAtomic)) {
             resetTransfer();
             return -1;
         }
 
         transferActive = true;
         if (!mc.player.getInventory().getStack(hotbarSlot).isEmpty()) {
-            abortTransfer();
+            abortTransfer(beginAtomic, endAtomic);
             return -1;
         }
         return hotbarSlot;
     }
 
-    public boolean finishTransfer() {
+    public boolean finishTransfer(Runnable beginAtomic, Runnable endAtomic) {
         if (!transferActive) return true;
-        if (!swapHotbarWithInventory(hotbarSlot, inventorySlot)) return false;
+        if (!runAtomicSwap(hotbarSlot, inventorySlot, beginAtomic, endAtomic)) return false;
         resetTransfer();
         return true;
     }
 
-    public void abortTransfer() {
-        if (transferActive) swapHotbarWithInventory(hotbarSlot, inventorySlot);
+    public void abortTransfer(Runnable beginAtomic, Runnable endAtomic) {
+        if (transferActive) runAtomicSwap(hotbarSlot, inventorySlot, beginAtomic, endAtomic);
         resetTransfer();
     }
 
@@ -68,13 +75,28 @@ public final class InventoryOverflowController {
         return -1;
     }
 
+    private boolean runAtomicSwap(int hotbar, int inventory, Runnable beginAtomic, Runnable endAtomic) {
+        beginAtomic.run();
+        try {
+            return swapHotbarWithInventory(hotbar, inventory);
+        } finally {
+            endAtomic.run();
+        }
+    }
+
     private boolean swapHotbarWithInventory(int hotbar, int inventory) {
         if (mc.player == null || mc.interactionManager == null) return false;
         if (hotbar < SlotUtils.HOTBAR_START || hotbar > SlotUtils.HOTBAR_END) return false;
         if (inventory < SlotUtils.MAIN_START || inventory > SlotUtils.MAIN_END) return false;
         int slotId = SlotUtils.indexToId(inventory);
         if (slotId < 0) return false;
-        mc.interactionManager.clickSlot(mc.player.currentScreenHandler.syncId, slotId, hotbar, SlotActionType.SWAP, mc.player);
+        mc.interactionManager.clickSlot(
+            mc.player.currentScreenHandler.syncId,
+            slotId,
+            hotbar,
+            SlotActionType.SWAP,
+            mc.player
+        );
         return true;
     }
 
