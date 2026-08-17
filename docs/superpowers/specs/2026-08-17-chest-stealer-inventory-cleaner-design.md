@@ -12,7 +12,7 @@ Add two new independent Meteor modules to the existing addon JAR while preservin
 - `Chest Stealer`
 - `Inventory Cleaner`
 
-The user-visible behavior and settings of Chest Stealer, ChestAura, SilentScreen, and Inventory Cleaner should align as closely as practical with LiquidBounce `nextgen` at pinned reference commit `141631789e5aeb7851562052dca567ab49716e99`.
+The user-visible behavior and settings of Chest Stealer, ChestAura, SilentScreen, and Inventory Cleaner should align with LiquidBounce `nextgen` at pinned reference commit `141631789e5aeb7851562052dca567ab49716e99` within the explicit scope boundaries in this document.
 
 The implementation is a clean-room Java rewrite using Fabric/Minecraft client APIs. The project does not perform a line-by-line Kotlin-to-Java translation and does not import LiquidBounce framework classes.
 
@@ -139,7 +139,7 @@ Container constraints do not expose the player-inventory-only `InventoryOpen` re
 
 Each range is sampled per relevant action/wait, not once for the entire session.
 
-`MissChance` may only be represented by a safe no-op/wait behavior. It must never intentionally create an invalid slot mutation or item-loss risk.
+`MissChance` is represented only by a safe no-op delay cycle: when a miss is selected, no slot click is issued, the configured click delay is observed, then the state is revalidated and replanned. A miss must never intentionally mutate a slot or cursor stack.
 
 ### 6.2 Top-level settings
 
@@ -197,7 +197,7 @@ OnFull=Throw: ask the cleanup plan for discardable player items. Dispose of one 
 
 ### 6.7 Container filters
 
-Handler-type checking is enabled by default and initially allows the reference revision's standard chest/shulker handler classes (generic 9x3, generic 9x6, shulker box equivalents under Yarn mappings).
+Handler-type checking is enabled by default and initially allows the reference revision's standard chest/shulker handler classes (generic 9x3, generic 9x6, and shulker-box equivalents under Yarn mappings).
 
 Title checking is enabled by default and recognizes the reference defaults:
 
@@ -219,15 +219,17 @@ Pinned settings:
 - Range: 3.0, allowed 1.0..6.0
 - WallRange: 0.0, allowed 0.0..6.0 and clamped to Range
 - Delay: 5 ticks, allowed 1..80
-- SwingMode: semantic equivalent of the reference default
+- SwingMode: `DoNotHide` (pinned reference enum value `DO_NOT_HIDE`)
 - NotDuringCombat: true
 - TrackManualInteractions: true
 - PauseOn: Combat / UsingItem, default empty
 - AwaitContainer: enabled
   - Timeout: 10 ticks
   - MaxRetries: 4
-- ValidStorageBlocks: configurable set matching the reference categories
+- ValidStorageBlocks: configurable set matching the pinned default construction
 - Rotations: dedicated ChestAura rotation settings
+
+`SwingMode=DoNotHide` means a successful ChestAura block interaction performs the normal visible main-hand swing animation rather than suppressing the client swing.
 
 ### 7.1 Storage discovery
 
@@ -238,7 +240,7 @@ Search outward from player eye position, sort candidates by distance, and reject
 - blocked vanilla chests
 - targets for which no valid interaction/raycast point exists under Range/WallRange
 
-Default storage coverage follows the pinned reference intent: chest variants, shulker boxes, barrels, furnaces, brewing stands, dispensers, and hoppers. The final opened GUI still has to pass Chest Stealer handler/title filters before stealing begins.
+The default storage set is constructed from registry entries whose identifier/path naming ends with the reference suffix families `CHEST`, `SHULKER_BOX`, `BARREL`, or `FURNACE`, plus explicit Brewing Stand, Dispenser, and Hopper entries. This intentionally captures vanilla variants such as trapped chests, colored shulker boxes, blast furnaces, and smokers when their registry naming matches those families. The final opened GUI still has to pass Chest Stealer handler/title filters before stealing begins.
 
 ### 7.2 Rotation and interaction
 
@@ -268,9 +270,11 @@ When a double chest half is tracked, also track the paired half. Clear target, r
 The pinned ChestAura rotation group is non-combat-specific and exposes:
 
 - AngleSmooth: Linear / Sigmoid / Acceleration
-- MovementCorrection: default Silent-equivalent behavior
+- MovementCorrection: Silent
 - ResetThreshold: 2 degrees
 - TicksUntilReset: 5
+
+For this addon, `MovementCorrection=Silent` means the rotation backend may send the server-facing yaw/pitch required for ChestAura while leaving the visible client camera orientation unchanged; player movement input remains based on the visible local orientation and is not visibly snapped toward the chest target.
 
 Linear defaults to 180..180 horizontal and vertical turn speed.
 
@@ -303,7 +307,11 @@ When a current screen is eligible for Chest Stealer and SilentScreen is enabled:
 - keep the underlying screen handler, sync id, cursor stack, and slot mapping intact
 - allow the internal inventory scheduler to continue using the handler
 
-### 8.2 Mixins
+### 8.2 Cursor behavior
+
+`UnlockCursor=false` uses game-style mouse capture while the container is visually hidden so the player can continue normal camera control. `UnlockCursor=true` keeps/releases a normal GUI cursor while the container remains hidden. Leaving SilentScreen, closing the container, disabling the module, disconnecting, or changing worlds must restore the cursor mode appropriate to the newly active vanilla screen/game state.
+
+### 8.3 Mixins
 
 Two mixins are part of the baseline design:
 
@@ -312,7 +320,7 @@ Two mixins are part of the baseline design:
 
 A mouse/cursor mixin is conditional. Prefer public Minecraft/Fabric mouse APIs first; add the mixin only if they cannot reproduce UnlockCursor and reliable restoration semantics on 1.21.11.
 
-### 8.3 Inventory tag
+### 8.4 Inventory tag
 
 Track the last interacted storage `BlockPos`, project its center into screen space, and draw live container stacks from the active handler. For double chests, center the tag between the two halves. `RenderOffset` applies before world-to-screen projection.
 
@@ -406,17 +414,17 @@ Each type has an allocation priority so specialized target slots can be filled b
 
 ### 9.3 Comparison rules
 
-Weapon scoring considers attack damage, attack speed, relevant enchantment value, durability, enchantability, and hotbar preference. It must use Minecraft item/component data rather than display-name heuristics.
+Weapon scoring considers attack damage, attack speed, the pinned reference's relevant enchantment weights, durability, enchantability, and hotbar preference. It uses Minecraft item/component data rather than display-name heuristics.
 
-Mining-tool scoring considers valid mining speed, relevant enchantments such as Silk Touch/Unbreaking/Fortune, durability, and hotbar preference.
+Mining-tool scoring considers effective mining speed, Silk Touch, Unbreaking, Fortune, durability, and hotbar preference.
 
-Armor scoring evaluates the best available current armor combination and also retains armor pieces that are useful in plausible future full-armor configurations. Inventory Cleaner does not equip armor.
+Armor scoring evaluates the best available current armor combination and also retains armor pieces that are useful in the reference algorithm's future full-diamond-armor comparison. Inventory Cleaner does not equip armor.
 
-Food scoring treats golden/enchanting-golden-apple classes specially and then compares nutritional/saturation usefulness. `MaximumFoodPoints` is a nutrition-value constraint (`stack count × nutrition`), not an item-count limit.
+Food scoring prioritizes enchanted golden apples, then golden apples, then compares saturation-to-nutrition ratio, nutrition, saturation, preferred stack-size behavior, hotbar preference, and a deterministic tie breaker. `MaximumFoodPoints` is a nutrition-value constraint (`stack count × nutrition`), not an item-count limit.
 
-Potion classification accepts only potion candidates whose effects pass the configured reference-aligned beneficial-effect rule.
+Potion classification uses the same beneficial-effect membership set as the pinned `PotionItemFacet.GOOD_STATUS_EFFECTS`: an item receives the normal Potion facet only when every contained potion effect belongs to that verified pinned allow-set. The Java port will enumerate those effect registry keys explicitly from the pinned reference during implementation; no name, lore, or localization heuristic is permitted.
 
-Block classification applies an independently implemented usefulness filter before assigning the normal Block facet.
+Block classification behaviorally matches the pinned `ScaffoldBlockItemSelection` validity/unfavourable decisions for vanilla block stacks, but is implemented independently inside `BlockUsefulnessEvaluator`; it does not import or translate Scaffold source. Nonqualifying block stacks fall back to a generic/non-useful facet rather than automatically receiving the Block role.
 
 ### 9.4 Amount constraints
 
@@ -430,7 +438,7 @@ Blacklist filtering happens before normal candidate allocation. Blacklisted item
 
 ### 9.6 Greedy
 
-The setting remains visible and defaults to true because it exists in the pinned reference revision. The pinned revision does not implement its effective greedy-check path, so the clean-room compatibility implementation intentionally treats it as a no-op. The setting tooltip should explain this.
+The setting remains visible and defaults to true because it exists in the pinned reference revision. The pinned revision does not implement its effective greedy-check path, so the clean-room compatibility implementation intentionally treats it as a no-op. The setting tooltip should state that it is retained for pinned-revision compatibility and currently has no behavioral effect.
 
 ### 9.7 Cleanup plan
 
@@ -561,11 +569,15 @@ Provide a lightweight `PlayerActivityTracker` for requirements used by this addo
 - block breaking
 - combat activity
 
-This replaces dependencies on LiquidBounce's combat/activity managers. The combat signal should be conservative and locally derived; the exact heuristic belongs in the implementation plan and tests, but the public semantics remain `NotDuringCombat`/`PauseOn Combat`.
+This replaces dependencies on LiquidBounce's combat/activity managers.
+
+For this addon, `combatActive` is deterministic and local: set/refresh a 100-tick (5-second at 20 TPS) countdown when the local player either (a) successfully attacks a living entity through the client interaction path, or (b) receives damage whose source has a living-entity attacker. `combatActive` remains true while that countdown is above zero. Clear it on disconnect, world change, death/respawn session replacement, or runtime reset. Environmental damage with no living-entity attacker does not activate combat. This is the explicit compatibility boundary used by `NotDuringCombat` and `PauseOn Combat`; it is not claimed to reproduce every internal LiquidBounce `CombatManager` signal.
+
+`NoMovement` passes only when movement input has zero horizontal movement and jump is not pressed. `NotUsingItem` reflects the player's current item-use state. `NotBreaking` reflects the client interaction manager's active block-breaking state. `NoRotation` passes only when the rotation coordinator reports no change from the previously accepted server-facing yaw/pitch for the current tick window.
 
 ## 14. Lifecycle Reset
 
-On disconnect, world change, null player/network handler, or explicit runtime reset:
+On disconnect, world change, null player/network handler, death/respawn player replacement, or explicit runtime reset:
 
 - clear scheduler queues
 - release inventory ownership
@@ -574,8 +586,9 @@ On disconnect, world change, null player/network handler, or explicit runtime re
 - clear ChestAura target/retry/interacted state
 - disable SilentScreen hidden state and restore cursor mode
 - discard Cleaner's current snapshot/plan
+- clear PlayerActivityTracker timers
 
-No handler ids, pending clicks, world block positions, or rotation targets survive across worlds/servers.
+No handler ids, pending clicks, world block positions, combat timers, or rotation targets survive across worlds/servers.
 
 ## 15. Mixin Budget
 
@@ -652,10 +665,16 @@ Pure/planner tests:
   - mutex ownership
   - cancellation
   - fresh-plan requirement
+  - MissChance no-op path
 - `ChestAuraTrackerTest`
   - timeout/retry
   - double-chest tracking
   - manual interaction tracking
+- `PlayerActivityTrackerTest`
+  - attack starts/refreshes 100-tick combat window
+  - entity-caused received damage starts/refreshes it
+  - environmental damage does not
+  - lifecycle reset clears it
 
 Build gates:
 
