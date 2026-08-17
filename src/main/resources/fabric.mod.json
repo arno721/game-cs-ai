@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "armor-stand-grabber",
+  "version": "${version}",
+  "name": "Armor Stand Grabber",
+  "description": "Meteor Client addon for through-wall armor stand equipment retrieval.",
+  "authors": ["arno721"],
+  "contact": {"sources": "https://github.com/arno721/game-cs-ai"},
+  "environment": "client",
+  "entrypoints": {
+    "meteor": ["com.arno721.armorstandgrabber.ArmorStandGrabberAddon"]
+  },
+  "custom": {
+    "meteor-client:color": "155,55,230",
+    "modmenu": {"parent": {"id": "meteor-client"}}
+  },
+  "depends": {
+    "java": ">=21",
+    "minecraft": ["${mc_version}"],
+    "fabric-api": "*",
+    "meteor-client": "*"
+  }
+}
