@@ -138,6 +138,6 @@ public class ArmorStandGrabber extends Module {
             default -> 0.05 * scale;
         };
 
-        return armorStand.getPos().add(0.0, y, 0.0);
+        return new Vec3d(armorStand.getX(), armorStand.getY() + y, armorStand.getZ());
     }
 }
