@@ -1,0 +1,7 @@
+package com.arno721.armorstandgrabber.inventory;
+
+public enum ItemType {
+    ARMOR, SWORD, WEAPON, SPEAR, MACE, BOW, CROSSBOW, ARROW,
+    AXE, PICKAXE, SHOVEL, HOE, TOOL, ROD, THROWABLE, SHIELD,
+    WATER, LAVA, MILK, BUCKET, PEARL, GAPPLE, FOOD, POTION, BLOCK, NONE
+}
