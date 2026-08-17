@@ -6,6 +6,7 @@ import meteordevelopment.meteorclient.addons.GithubRepo;
 import meteordevelopment.meteorclient.addons.MeteorAddon;
 import meteordevelopment.meteorclient.systems.modules.Category;
 import meteordevelopment.meteorclient.systems.modules.Modules;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import org.slf4j.Logger;
 
 public class ArmorStandGrabberAddon extends MeteorAddon {
@@ -15,7 +16,9 @@ public class ArmorStandGrabberAddon extends MeteorAddon {
     @Override
     public void onInitialize() {
         LOG.info("Initializing Armor Stand Grabber");
-        Modules.get().add(new ArmorStandGrabber());
+        ArmorStandGrabber module = new ArmorStandGrabber();
+        Modules.get().add(module);
+        ClientTickEvents.END_CLIENT_TICK.register(client -> module.onFabricTick());
     }
 
     @Override

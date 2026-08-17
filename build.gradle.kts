@@ -23,6 +23,7 @@ dependencies {
     minecraft(libs.minecraft)
     mappings(variantOf(libs.yarn) { classifier("v2") })
     modImplementation(libs.fabric.loader)
+    modImplementation(libs.fabric.api)
     modImplementation(libs.meteor.client)
 
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
