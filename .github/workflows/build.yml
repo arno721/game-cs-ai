@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/armor-stand-grabber
+      - feature/chest-stealer-inventory-cleaner
   workflow_dispatch:
 
 jobs:
