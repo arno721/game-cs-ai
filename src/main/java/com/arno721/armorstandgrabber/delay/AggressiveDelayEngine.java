@@ -52,12 +52,18 @@ public final class AggressiveDelayEngine {
             };
         }
 
-        value = applySessionEnvelope(value, config);
+        boolean fullCorrelation = algorithm == AggressiveAlgorithm.CorrelatedRandom
+            && previousDelayMs >= 0
+            && clamp(config.correlation(), 0.0, 1.0) >= 1.0
+            && !specialBranch;
+
+        if (!specialBranch && !fullCorrelation) value = applySessionEnvelope(value, config);
         if (chance(config.outlierChance())) {
             value *= Math.max(0.0, config.outlierScale());
             specialBranch = true;
+            fullCorrelation = false;
         }
-        if (!specialBranch) {
+        if (!specialBranch && !fullCorrelation) {
             value += (max - min) * clamp(config.bias(), -1.0, 1.0) * 0.25;
             value += (max - min) * random.nextGaussian() * Math.max(0.0, config.jitter());
         }
