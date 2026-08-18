@@ -1,6 +1,7 @@
 package com.arno721.armorstandgrabber.chest;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Random;
@@ -12,7 +13,7 @@ public final class SelectionPlanner {
         return switch (config.mode()) {
             case Index -> index(copy, config.indexOrder());
             case Random -> {
-                config.random().shuffle(copy);
+                Collections.shuffle(copy, config.random());
                 yield List.copyOf(copy);
             }
             case Distance -> distance(copy, config);
