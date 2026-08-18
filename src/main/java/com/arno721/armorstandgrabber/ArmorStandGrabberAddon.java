@@ -1,6 +1,7 @@
 package com.arno721.armorstandgrabber;
 
 import com.arno721.armorstandgrabber.modules.ArmorStandGrabber;
+import com.arno721.armorstandgrabber.modules.ChestStealer;
 import com.arno721.armorstandgrabber.runtime.ClientRuntime;
 import com.mojang.logging.LogUtils;
 import meteordevelopment.meteorclient.addons.GithubRepo;
@@ -23,31 +24,25 @@ public class ArmorStandGrabberAddon extends MeteorAddon {
 
         runtime = new ClientRuntime(MinecraftClient.getInstance());
         ArmorStandGrabber armorStandGrabber = new ArmorStandGrabber(
-            runtime.inventoryMutex(),
-            runtime.rotationCoordinator()
+            runtime.inventoryMutex(), runtime.rotationCoordinator()
         );
+        ChestStealer chestStealer = new ChestStealer(runtime);
 
         runtime.register(armorStandGrabber);
+        runtime.register(chestStealer);
         Modules.get().add(armorStandGrabber);
+        Modules.get().add(chestStealer);
         ClientTickEvents.END_CLIENT_TICK.register(runtime::tick);
     }
 
-    public static ClientRuntime runtime() {
-        return runtime;
-    }
+    public static ClientRuntime runtime() { return runtime; }
 
     @Override
-    public void onRegisterCategories() {
-        Modules.registerCategory(CATEGORY);
-    }
+    public void onRegisterCategories() { Modules.registerCategory(CATEGORY); }
 
     @Override
-    public String getPackage() {
-        return "com.arno721.armorstandgrabber";
-    }
+    public String getPackage() { return "com.arno721.armorstandgrabber"; }
 
     @Override
-    public GithubRepo getRepo() {
-        return new GithubRepo("arno721", "game-cs-ai");
-    }
+    public GithubRepo getRepo() { return new GithubRepo("arno721", "game-cs-ai"); }
 }
