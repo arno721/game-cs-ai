@@ -24,16 +24,20 @@ public final class ChestStealSession {
             && java.util.Objects.equals(title, descriptor.title());
     }
 
-    public void markMutation(long tick) {
-        lastMutationTick = tick;
-        phase = ChestStealPhase.ClickDelay;
+    public void markMutation(long tick) { lastMutationTick = tick; }
+    public void enterPlanning() { phase = ChestStealPhase.Planning; }
+
+    public void enterClickDelay(long deadlineTick, long mutationTick) {
+        this.deadlineTick = deadlineTick;
+        this.lastMutationTick = mutationTick;
+        this.phase = ChestStealPhase.ClickDelay;
     }
 
-    public void enterPlanning() { phase = ChestStealPhase.Planning; }
     public void enterCloseDelay(long deadlineTick) {
         this.deadlineTick = deadlineTick;
         phase = ChestStealPhase.CloseDelay;
     }
+
     public void enterClosing() { phase = ChestStealPhase.Closing; }
 
     public void reset() {
