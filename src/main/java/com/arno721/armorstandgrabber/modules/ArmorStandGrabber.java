@@ -14,6 +14,10 @@ import com.arno721.armorstandgrabber.rotation.RotationConfig;
 import com.arno721.armorstandgrabber.rotation.RotationController;
 import com.arno721.armorstandgrabber.rotation.RotationMode;
 import com.arno721.armorstandgrabber.rotation.RotationTarget;
+import com.arno721.armorstandgrabber.runtime.InventoryMutex;
+import com.arno721.armorstandgrabber.runtime.RotationCoordinator;
+import com.arno721.armorstandgrabber.runtime.RuntimeOwner;
+import com.arno721.armorstandgrabber.runtime.RuntimeTickParticipant;
 import com.arno721.armorstandgrabber.session.RetrievalPhase;
 import com.arno721.armorstandgrabber.session.RetrievalSession;
 import meteordevelopment.meteorclient.events.entity.player.DoItemUseEvent;
@@ -37,7 +41,7 @@ import net.minecraft.util.math.Vec3d;
 
 import java.util.Optional;
 
-public class ArmorStandGrabber extends Module {
+public class ArmorStandGrabber extends Module implements RuntimeTickParticipant {
     private static final EquipmentSlot[] SLOT_ORDER = { EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET, EquipmentSlot.MAINHAND, EquipmentSlot.OFFHAND };
     private static final long INTERACTION_TIMEOUT_MS = 1500L;
 
@@ -105,27 +109,43 @@ public class ArmorStandGrabber extends Module {
     private final AggressiveDelayEngine aggressiveDelayEngine = new AggressiveDelayEngine();
     private final RetrievalSession session = new RetrievalSession();
     private final InventoryOverflowController overflowController = new InventoryOverflowController(mc);
-    private final RotationController rotationController = new RotationController(mc);
+    private final InventoryMutex inventoryMutex;
+    private final RotationController rotationController;
     private String abortMessage;
 
-    public ArmorStandGrabber() {
+    public ArmorStandGrabber(InventoryMutex inventoryMutex, RotationCoordinator rotationCoordinator) {
         super(ArmorStandGrabberAddon.CATEGORY, "armor-stand-grabber", "Retrieve armor-stand equipment through blocks with configurable timing, overflow, and rotation tracking.");
+        this.inventoryMutex = inventoryMutex;
+        this.rotationController = new RotationController(mc, rotationCoordinator);
     }
 
     @Override
-    public void onDeactivate() { finishSession(false, null); }
+    public void onDeactivate() {
+        finishSession(false, null);
+    }
 
-    public void onFabricTick() {
+    @Override
+    public RuntimeOwner runtimeOwner() {
+        return RuntimeOwner.ARMOR_STAND_GRABBER;
+    }
+
+    @Override
+    public void onRuntimeTick() {
         if (!isActive() || session.phase() == RetrievalPhase.Idle) return;
         if (!validateSession()) return;
-        if (rotationEnabled.get() && rotationController.isActive()) rotationController.tick(session.currentSlot(), rotationMode.get(), rotationTarget.get(), rotationAlgorithm.get(), rotationConfig());
+        if (rotationEnabled.get() && rotationController.isActive()) {
+            rotationController.tick(session.currentSlot(), rotationMode.get(), rotationTarget.get(), rotationAlgorithm.get(), rotationConfig());
+        }
         processSession(nowMs());
     }
 
     @EventHandler
     private void onUse(DoItemUseEvent event) {
         if (mc.player == null || mc.world == null || mc.interactionManager == null || !mc.options.useKey.isPressed()) return;
-        if (session.phase() != RetrievalPhase.Idle) { event.cancel(); return; }
+        if (session.phase() != RetrievalPhase.Idle) {
+            event.cancel();
+            return;
+        }
         ArmorStandEntity armorStand = findTarget();
         if (armorStand == null) return;
         event.cancel();
@@ -134,8 +154,18 @@ public class ArmorStandGrabber extends Module {
     }
 
     private void beginSession(ArmorStandEntity armorStand) {
+        if (!inventoryMutex.tryAcquire(RuntimeOwner.ARMOR_STAND_GRABBER)) {
+            warning("Another inventory automation is finishing an atomic transaction.");
+            return;
+        }
+
         session.begin(armorStand, mc.player.getInventory().getSelectedSlot(), SLOT_ORDER);
-        if (!session.hasPending()) { warning("The targeted armor stand has no equipment to retrieve."); session.reset(); return; }
+        if (!session.hasPending()) {
+            warning("The targeted armor stand has no equipment to retrieve.");
+            session.reset();
+            releaseInventoryOwnership();
+            return;
+        }
         if (delayProfile.get() == DelayProfile.Aggressive) aggressiveDelayEngine.beginSession(session.pendingCount() * 2);
         if (rotationEnabled.get()) rotationController.begin(armorStand);
         abortMessage = null;
@@ -146,22 +176,48 @@ public class ArmorStandGrabber extends Module {
             switch (session.phase()) {
                 case PrepareSlot -> {
                     session.discardEmptyFrontSlots();
-                    if (!session.hasPending()) { session.phase(RetrievalPhase.Complete); continue; }
+                    if (!session.hasPending()) {
+                        session.phase(RetrievalPhase.Complete);
+                        continue;
+                    }
                     session.currentSlot(session.peekPending());
                     int hotbarSlot = findEmptyHotbarSlot();
                     if (hotbarSlot < 0) {
-                        if (overflowMode.get() == OverflowMode.Off) { abort("No empty hotbar slots remain."); continue; }
-                        hotbarSlot = overflowController.prepareOverflow(session.originalSelectedSlot(), overflowMode.get());
-                        if (hotbarSlot < 0) { abort("No usable inventory overflow destination remains."); continue; }
+                        if (overflowMode.get() == OverflowMode.Off) {
+                            abort("No empty hotbar slots remain.");
+                            continue;
+                        }
+                        hotbarSlot = overflowController.prepareOverflow(
+                            session.originalSelectedSlot(),
+                            overflowMode.get(),
+                            this::beginInventoryAtomic,
+                            this::endInventoryAtomic
+                        );
+                        if (hotbarSlot < 0) {
+                            abort("No usable inventory overflow destination remains.");
+                            continue;
+                        }
                     }
                     session.currentHotbarSlot(hotbarSlot);
-                    if (!InvUtils.swap(hotbarSlot, false)) { abort("Could not select the destination hotbar slot."); continue; }
+                    if (!InvUtils.swap(hotbarSlot, false)) {
+                        abort("Could not select the destination hotbar slot.");
+                        continue;
+                    }
                     if (delayProfile.get() == DelayProfile.Normal) session.phase(RetrievalPhase.RotateForInteraction);
-                    else { session.deadlineMs(now + sampleSwitchDelay()); session.phase(RetrievalPhase.WaitSwitchDelay); return; }
+                    else {
+                        session.deadlineMs(now + sampleSwitchDelay());
+                        session.phase(RetrievalPhase.WaitSwitchDelay);
+                        return;
+                    }
                 }
-                case WaitSwitchDelay -> { if (now < session.deadlineMs()) return; session.phase(RetrievalPhase.RotateForInteraction); }
+                case WaitSwitchDelay -> {
+                    if (now < session.deadlineMs()) return;
+                    session.phase(RetrievalPhase.RotateForInteraction);
+                }
                 case RotateForInteraction -> {
-                    if (rotationEnabled.get()) rotationController.prepareInteraction(session.currentSlot(), rotationMode.get(), rotationTarget.get(), rotationAlgorithm.get(), rotationConfig());
+                    if (rotationEnabled.get()) {
+                        rotationController.prepareInteraction(session.currentSlot(), rotationMode.get(), rotationTarget.get(), rotationAlgorithm.get(), rotationConfig());
+                    }
                     session.phase(RetrievalPhase.Interact);
                 }
                 case Interact -> {
@@ -174,45 +230,102 @@ public class ArmorStandGrabber extends Module {
                 }
                 case WaitItem -> {
                     int slot = session.currentHotbarSlot();
-                    if (slot >= 0 && !mc.player.getInventory().getStack(slot).isEmpty()) { session.phase(RetrievalPhase.FinishOverflow); continue; }
-                    if (now >= session.interactionDeadlineMs()) { abort("Timed out waiting for the armor stand interaction."); continue; }
+                    if (slot >= 0 && !mc.player.getInventory().getStack(slot).isEmpty()) {
+                        session.phase(RetrievalPhase.FinishOverflow);
+                        continue;
+                    }
+                    if (now >= session.interactionDeadlineMs()) {
+                        abort("Timed out waiting for the armor stand interaction.");
+                        continue;
+                    }
                     return;
                 }
                 case FinishOverflow -> {
-                    if (!overflowController.finishTransfer()) { abort("Could not move the retrieved item into the inventory."); continue; }
+                    if (!overflowController.finishTransfer(this::beginInventoryAtomic, this::endInventoryAtomic)) {
+                        abort("Could not move the retrieved item into the inventory.");
+                        continue;
+                    }
                     session.completeCurrentSlot();
                     session.discardEmptyFrontSlots();
-                    if (!session.hasPending()) { session.phase(RetrievalPhase.Complete); continue; }
+                    if (!session.hasPending()) {
+                        session.phase(RetrievalPhase.Complete);
+                        continue;
+                    }
                     session.deadlineMs(now + sampleItemDelay());
                     session.phase(RetrievalPhase.WaitItemDelay);
                     return;
                 }
-                case WaitItemDelay -> { if (now < session.deadlineMs()) return; session.phase(RetrievalPhase.PrepareSlot); }
-                case Complete -> { finishSession(true, null); return; }
-                case Abort -> { finishSession(false, abortMessage); return; }
-                case Idle -> { return; }
+                case WaitItemDelay -> {
+                    if (now < session.deadlineMs()) return;
+                    session.phase(RetrievalPhase.PrepareSlot);
+                }
+                case Complete -> {
+                    finishSession(true, null);
+                    return;
+                }
+                case Abort -> {
+                    finishSession(false, abortMessage);
+                    return;
+                }
+                case Idle -> {
+                    return;
+                }
             }
         }
     }
 
     private boolean validateSession() {
-        if (mc.player == null || mc.world == null || mc.interactionManager == null) { finishSession(false, null); return false; }
-        if (session.target() == null || !session.target().isAlive()) { finishSession(false, "Armor stand is no longer available."); return false; }
-        if (mc.currentScreen != null && !(mc.currentScreen instanceof InventoryScreen)) { finishSession(false, "Another screen interrupted the retrieval session."); return false; }
+        if (mc.player == null || mc.world == null || mc.interactionManager == null) {
+            finishSession(false, null);
+            return false;
+        }
+        if (session.target() == null || !session.target().isAlive()) {
+            finishSession(false, "Armor stand is no longer available.");
+            return false;
+        }
+        if (mc.currentScreen != null && !(mc.currentScreen instanceof InventoryScreen)) {
+            finishSession(false, "Another screen interrupted the retrieval session.");
+            return false;
+        }
         return true;
     }
 
-    private void abort(String message) { abortMessage = message; session.phase(RetrievalPhase.Abort); }
+    private void abort(String message) {
+        abortMessage = message;
+        session.phase(RetrievalPhase.Abort);
+    }
 
     private void finishSession(boolean completed, String message) {
-        overflowController.abortTransfer();
-        if (mc.player != null && session.originalSelectedSlot() >= 0 && session.originalSelectedSlot() <= 8) InvUtils.swap(session.originalSelectedSlot(), false);
+        overflowController.abortTransfer(this::beginInventoryAtomic, this::endInventoryAtomic);
+        if (mc.player != null && session.originalSelectedSlot() >= 0 && session.originalSelectedSlot() <= 8) {
+            InvUtils.swap(session.originalSelectedSlot(), false);
+        }
         overflowController.finishScreen(autoClose.get());
         rotationController.stop();
         aggressiveDelayEngine.beginSession(0);
         if (!completed && message != null) warning(message);
         session.reset();
         abortMessage = null;
+        releaseInventoryOwnership();
+    }
+
+    private void beginInventoryAtomic() {
+        if (!inventoryMutex.isOwnedBy(RuntimeOwner.ARMOR_STAND_GRABBER)) {
+            if (!inventoryMutex.tryAcquire(RuntimeOwner.ARMOR_STAND_GRABBER)) {
+                throw new IllegalStateException("Armor Stand Grabber could not reacquire inventory ownership");
+            }
+        }
+        inventoryMutex.beginAtomic(RuntimeOwner.ARMOR_STAND_GRABBER);
+    }
+
+    private void endInventoryAtomic() {
+        inventoryMutex.endAtomic(RuntimeOwner.ARMOR_STAND_GRABBER);
+    }
+
+    private void releaseInventoryOwnership() {
+        if (inventoryMutex.isOwnedBy(RuntimeOwner.ARMOR_STAND_GRABBER) && !inventoryMutex.atomic()) {
+            inventoryMutex.release(RuntimeOwner.ARMOR_STAND_GRABBER);
+        }
     }
 
     private long sampleSwitchDelay() {
@@ -235,7 +348,9 @@ public class ArmorStandGrabber extends Module {
         return AggressiveDelayConfig.builder().range(aggressiveMin.get(), aggressiveMax.get()).sigma(sigma.get()).skew(skew.get()).bias(bias.get()).jitter(jitter.get()).correlation(correlation.get()).momentum(momentum.get()).driftStrength(driftStrength.get()).driftSpeed(driftSpeed.get()).burstChance(burstChance.get()).burstSize(burstSizeMin.get(), burstSizeMax.get()).burstMultiplier(burstMultiplier.get()).pauseChance(pauseChance.get()).pauseRange(pauseMin.get(), pauseMax.get()).outlierChance(outlierChance.get()).outlierScale(outlierScale.get()).warmupItems(warmupItems.get()).cooldownItems(cooldownItems.get()).acceleration(acceleration.get()).deceleration(deceleration.get()).clampEnabled(clampAggressive.get()).build();
     }
 
-    private RotationConfig rotationConfig() { return new RotationConfig(maxYawSpeed.get(), maxPitchSpeed.get(), rotationAcceleration.get(), rotationDeceleration.get(), rotationSmoothing.get()); }
+    private RotationConfig rotationConfig() {
+        return new RotationConfig(maxYawSpeed.get(), maxPitchSpeed.get(), rotationAcceleration.get(), rotationDeceleration.get(), rotationSmoothing.get());
+    }
 
     private ArmorStandEntity findTarget() {
         float tickProgress = mc.getRenderTickCounter().getTickProgress(true);
@@ -249,26 +364,55 @@ public class ArmorStandGrabber extends Module {
             Optional<Vec3d> hit = armorStand.getBoundingBox().expand(0.15).raycast(start, end);
             if (hit.isEmpty()) continue;
             double distanceSq = start.squaredDistanceTo(hit.get());
-            if (distanceSq < bestDistanceSq) { bestDistanceSq = distanceSq; best = armorStand; }
+            if (distanceSq < bestDistanceSq) {
+                bestDistanceSq = distanceSq;
+                best = armorStand;
+            }
         }
         return best;
     }
 
     private int findEmptyHotbarSlot() {
-        for (int slot = SlotUtils.HOTBAR_START; slot <= SlotUtils.HOTBAR_END; slot++) if (mc.player.getInventory().getStack(slot).isEmpty()) return slot;
+        for (int slot = SlotUtils.HOTBAR_START; slot <= SlotUtils.HOTBAR_END; slot++) {
+            if (mc.player.getInventory().getStack(slot).isEmpty()) return slot;
+        }
         return -1;
     }
 
     private Vec3d interactionPoint(ArmorStandEntity armorStand, EquipmentSlot slot) {
         double scale = armorStand.isSmall() ? 0.5 : 1.0;
-        double y = switch (slot) { case HEAD -> 1.80 * scale; case CHEST -> 1.35 * scale; case LEGS -> 0.80 * scale; case FEET -> 0.30 * scale; case MAINHAND, OFFHAND -> 0.05 * scale; default -> 0.05 * scale; };
+        double y = switch (slot) {
+            case HEAD -> 1.80 * scale;
+            case CHEST -> 1.35 * scale;
+            case LEGS -> 0.80 * scale;
+            case FEET -> 0.30 * scale;
+            case MAINHAND, OFFHAND -> 0.05 * scale;
+            default -> 0.05 * scale;
+        };
         return new Vec3d(armorStand.getX(), armorStand.getY() + y, armorStand.getZ());
     }
 
-    private Setting<Integer> legitInt(String name, String description, int defaultValue, int min, int max) { return sgLegit.add(new IntSetting.Builder().name(name).description(description).defaultValue(defaultValue).range(min, max).sliderRange(min, Math.min(max, 1500)).visible(() -> delayProfile.get() == DelayProfile.Legit).build()); }
-    private Setting<Integer> aggressiveInt(String name, String description, int defaultValue, int min, int max) { return sgAggressive.add(new IntSetting.Builder().name(name).description(description).defaultValue(defaultValue).range(min, max).sliderRange(min, max).visible(this::aggressiveVisible).build()); }
-    private Setting<Double> aggressiveDouble(String name, String description, double defaultValue, double min, double max) { return sgAggressive.add(new DoubleSetting.Builder().name(name).description(description).defaultValue(defaultValue).range(min, max).sliderRange(min, max).visible(this::aggressiveVisible).build()); }
-    private Setting<Double> rotationDouble(String name, String description, double defaultValue, double min, double max) { return sgRotation.add(new DoubleSetting.Builder().name(name).description(description).defaultValue(defaultValue).range(min, max).sliderRange(min, max).visible(rotationEnabled::get).build()); }
-    private boolean aggressiveVisible() { return delayProfile.get() == DelayProfile.Aggressive; }
-    private static long nowMs() { return System.nanoTime() / 1_000_000L; }
+    private Setting<Integer> legitInt(String name, String description, int defaultValue, int min, int max) {
+        return sgLegit.add(new IntSetting.Builder().name(name).description(description).defaultValue(defaultValue).range(min, max).sliderRange(min, Math.min(max, 1500)).visible(() -> delayProfile.get() == DelayProfile.Legit).build());
+    }
+
+    private Setting<Integer> aggressiveInt(String name, String description, int defaultValue, int min, int max) {
+        return sgAggressive.add(new IntSetting.Builder().name(name).description(description).defaultValue(defaultValue).range(min, max).sliderRange(min, max).visible(this::aggressiveVisible).build());
+    }
+
+    private Setting<Double> aggressiveDouble(String name, String description, double defaultValue, double min, double max) {
+        return sgAggressive.add(new DoubleSetting.Builder().name(name).description(description).defaultValue(defaultValue).range(min, max).sliderRange(min, max).visible(this::aggressiveVisible).build());
+    }
+
+    private Setting<Double> rotationDouble(String name, String description, double defaultValue, double min, double max) {
+        return sgRotation.add(new DoubleSetting.Builder().name(name).description(description).defaultValue(defaultValue).range(min, max).sliderRange(min, max).visible(rotationEnabled::get).build());
+    }
+
+    private boolean aggressiveVisible() {
+        return delayProfile.get() == DelayProfile.Aggressive;
+    }
+
+    private static long nowMs() {
+        return System.nanoTime() / 1_000_000L;
+    }
 }
