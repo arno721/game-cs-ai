@@ -5,7 +5,6 @@ import com.arno721.armorstandgrabber.chest.*;
 import com.arno721.armorstandgrabber.runtime.*;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
-import net.minecraft.client.gui.screen.ingame.HandledScreen;
 import net.minecraft.item.ItemStack;
 import net.minecraft.screen.ScreenHandler;
 
@@ -67,28 +66,17 @@ public final class ChestStealer extends Module implements RuntimeTickParticipant
     }
 
     @Override
-    public RuntimeOwner runtimeOwner() {
-        return RuntimeOwner.CHEST_STEALER;
-    }
+    public RuntimeOwner runtimeOwner() { return RuntimeOwner.CHEST_STEALER; }
 
     @Override
     public void onRuntimeTick() {
-        if (!isActive() || mc.player == null) {
-            resetSession();
-            return;
-        }
+        if (!isActive() || mc.player == null) { resetSession(); return; }
 
         ContainerFilterConfig filter = new ContainerFilterConfig(
-            checkHandlerType.get(),
-            checkTitle.get(),
-            parseTitles(titleWhitelist.get()),
-            parseTitles(titleBlacklist.get())
+            checkHandlerType.get(), checkTitle.get(), parseTitles(titleWhitelist.get()), parseTitles(titleBlacklist.get())
         );
         var detected = containerDetector.detect(mc, filter);
-        if (detected.isEmpty()) {
-            resetSession();
-            return;
-        }
+        if (detected.isEmpty()) { resetSession(); return; }
         ContainerDescriptor descriptor = detected.get();
 
         if (session.phase() == ChestStealPhase.Idle || !session.matches(descriptor)) {
@@ -105,10 +93,9 @@ public final class ChestStealer extends Module implements RuntimeTickParticipant
         ActivitySnapshot activity = runtime.activityTracker().snapshot(mc, runtime.rotationCoordinator(), runtime.combatTracker());
         if (!ConstraintGate.allowed(constraints, activity, false)) return;
         if (runtime.inventoryMutex().owner() != RuntimeOwner.CHEST_STEALER && !runtime.inventoryMutex().tryAcquire(RuntimeOwner.CHEST_STEALER)) return;
-
         if (runtime.tickCount() < session.deadlineTick()) return;
-        if (session.phase() == ChestStealPhase.StartDelay || session.phase() == ChestStealPhase.ClickDelay) session.enterPlanning();
 
+        if (session.phase() == ChestStealPhase.StartDelay || session.phase() == ChestStealPhase.ClickDelay) session.enterPlanning();
         if (session.phase() == ChestStealPhase.CloseDelay) {
             if (runtime.tickCount() >= session.deadlineTick() && session.matches(descriptor) && autoClose.get()) {
                 mc.player.closeHandledScreen();
@@ -134,9 +121,7 @@ public final class ChestStealer extends Module implements RuntimeTickParticipant
         }
 
         if (random.nextInt(100) < missChance.get()) {
-            session.markMutation(runtime.tickCount());
-            session.enterPlanning();
-            session.markMutation(runtime.tickCount() + sampleTicks(clickDelayMin.get(), clickDelayMax.get()));
+            session.enterClickDelay(runtime.tickCount() + sampleTicks(clickDelayMin.get(), clickDelayMax.get()), runtime.tickCount());
             return;
         }
 
@@ -146,14 +131,10 @@ public final class ChestStealer extends Module implements RuntimeTickParticipant
             case Random -> SelectionConfig.random(random);
         };
         SelectionCandidate target = selectionPlanner.order(candidates, selectionConfig).getFirst();
-        InventoryTransaction transaction = moveMode.get() == ChestMoveMode.QuickMove
-            ? new ChestTransferPlanner().quickMove(target.slotId())
-            : new ChestTransferPlanner().quickMove(target.slotId());
+        InventoryTransaction transaction = new ChestTransferPlanner().quickMove(target.slotId());
 
         if (executor.execute(descriptor, transaction)) {
-            session.markMutation(runtime.tickCount());
-            session.enterPlanning();
-            session.markMutation(runtime.tickCount() + sampleTicks(clickDelayMin.get(), clickDelayMax.get()));
+            session.enterClickDelay(runtime.tickCount() + sampleTicks(clickDelayMin.get(), clickDelayMax.get()), runtime.tickCount());
         }
     }
 
@@ -169,16 +150,12 @@ public final class ChestStealer extends Module implements RuntimeTickParticipant
     }
 
     private int sampleTicks(int min, int max) {
-        int low = Math.min(min, max);
-        int high = Math.max(min, max);
+        int low = Math.min(min, max), high = Math.max(min, max);
         return low == high ? low : low + random.nextInt(high - low + 1);
     }
 
     private static List<String> parseTitles(String value) {
         if (value == null || value.isBlank()) return List.of();
-        return java.util.Arrays.stream(value.split(","))
-            .map(String::trim)
-            .filter(s -> !s.isEmpty())
-            .toList();
+        return java.util.Arrays.stream(value.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList();
     }
 }
